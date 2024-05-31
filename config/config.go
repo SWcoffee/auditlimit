@@ -29,7 +29,7 @@ func init() {
 	glog.SetDefaultHandler(func(ctx context.Context, in *glog.HandlerInput) {
 		m := map[string]interface{}{
 			"stdout": false,
-			"path":  "app/logs", // 此处必须重新设置，才可以实现db的log写入文件
+			"path":  "logs", // 此处必须重新设置，才可以实现db的log写入文件
 		}
 		in.Logger.SetConfigWithMap(m)
 		in.Next(ctx)

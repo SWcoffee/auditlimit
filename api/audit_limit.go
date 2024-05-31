@@ -80,7 +80,7 @@ func AuditLimit(r *ghttp.Request) {
 		if isFlagged {
 			r.Response.Status = 400
 			r.Response.WriteJson(MsgMod400)
-			g.Log().Fatal(ctx, "warring触发违禁词|", token, "|", prompt)
+			g.Log().Debug(ctx, "warning触发违禁词|", token, "|", prompt)
 			return
 		}
 	}
