@@ -1,11 +1,13 @@
 package config
 
 import (
+	"context"
 	"time"
 
 	"github.com/gogf/gf/v2/container/garray"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/os/gctx"
+	"github.com/gogf/gf/v2/os/glog"
 )
 
 var (
@@ -22,6 +24,18 @@ var (
 
 func init() {
 	ctx := gctx.GetInitCtx()
+
+	// 日志配置
+	glog.SetDefaultHandler(func(ctx context.Context, in *glog.HandlerInput) {
+		m := map[string]interface{}{
+			"stdout": false,
+			"path":   g.Config().MustGet(ctx, "logger.path", "app/logs").String(), // 此处必须重新设置，才可以实现db的log写入文件
+		}
+		in.Logger.SetConfigWithMap(m)
+		in.Next(ctx)
+	})
+
+
 	port := g.Cfg().MustGetWithEnv(ctx, "PORT").Int()
 	if port > 0 {
 		PORT = port
