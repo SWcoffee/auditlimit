@@ -8,7 +8,6 @@ import (
 	"github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/gogf/gf/v2/frame/g"
 	"github.com/gogf/gf/v2/net/ghttp"
-	"github.com/gogf/gf/v2/text/gstr"
 	"github.com/gogf/gf/v2/util/gconv"
 )
 
@@ -33,7 +32,7 @@ func AuditLimit(r *ghttp.Request) {
 		g.Log().Error(ctx, "GetJson", err)
 		r.Response.Status = 400
 		r.Response.WriteJson(g.Map{
-			"detail": err.Error(),
+			"error": err.Error(),
 		})
 	}
 	action := reqJson.Get("action").String() // action为 next时才是真正的请求，否则可能是继续上次请求 action 为 variant 时为重新生成
@@ -48,33 +47,26 @@ func AuditLimit(r *ghttp.Request) {
 	if containsAny(ctx, prompt, config.ForbiddenWords) {
 		r.Response.Status = 400
 		r.Response.WriteJson(g.Map{
-			"detail": "请珍惜账号,不要提问违禁内容.",
+			"error": "请珍惜账号,不要提问违禁内容.",
 		})
 		return
 	}
 
 	// OPENAI Moderation 检测
-	if config.OAIKEY != "" {
+	if config.OAIKEY != "" && prompt != "" {
 		// 检测是否包含违规内容
-		resp, err := g.Client().SetHeaderMap(g.MapStrStr{
+		respVar := g.Client().SetHeaderMap(g.MapStrStr{
 			"Authorization": "Bearer " + config.OAIKEY,
 			"Content-Type":  "application/json",
-		}).Post(ctx, config.MODERATION, g.Map{
+		}).PostVar(ctx, config.MODERATION, g.Map{
 			"input": prompt,
 		})
 
-		if err != nil {
-			g.Log().Error(ctx, "Moderation Error: ", err)
-			r.Response.Status = 400
-			r.Response.WriteJson(g.Map{
-				"detail": err.Error(),
-			})
-			return
-		}
 		// 返回的 json 中 results.flagged 为 true 时为违规内容
-		respBody := resp.ReadAllString()
+		// respBody := resp.ReadAllString()
 		//g.Log().Debug(ctx, "resp:", respBody)
-		respJson := gjson.New(respBody)
+		g.Dump(respVar)
+		respJson := gjson.New(respVar)
 		isFlagged := respJson.Get("results.0.flagged").Bool()
 		g.Log().Debug(ctx, "flagged", isFlagged)
 		if isFlagged {
@@ -84,40 +76,40 @@ func AuditLimit(r *ghttp.Request) {
 			return
 		}
 	}
-
-	// 判断模型是否为plus模型 如果是则使用plus模型的限制
-	// if config.PlusModels.Contains(model) {
-	if gstr.HasPrefix(model, "gpt-4") {
-		limiter := GetVisitor(token, config.LIMIT, config.PER)
-		// 获取剩余次数
-		remain := limiter.TokensAt(time.Now())
-		g.Log().Debug(ctx, "remain", remain)
-		if remain < 1 {
-			r.Response.Status = 429
-			// resMsg := gjson.New(MsgPlus429)
-			// 根据remain计算需要等待的时间
-			// 生产间隔
-			creatInterval := config.PER / time.Duration(config.LIMIT)
-			// 转换为秒
-			creatIntervalSec := float64(creatInterval.Seconds())
-			// 等待时间
-			wait := (1 - remain) * creatIntervalSec
-			g.Log().Debug(ctx, "wait", wait, "creatIntervalSec", creatIntervalSec)
-			// resMsg.Set("detail.clears_in", int(wait))
-			// r.Response.WriteJson(resMsg)
+	limit, per, limiter, err := GetVisitorWithModel(ctx, token, model)
+	if err != nil {
+		g.Log().Error(ctx, "GetVisitorWithModel", err)
+		r.Response.Status = 500
+		r.Response.WriteJson(g.Map{
+			"error": err.Error(),
+		})
+		return
+	}
+	// 获取剩余次数
+	remain := limiter.TokensAt(time.Now())
+	g.Log().Debug(ctx, token, model, "remain", remain, "limit", limit, "per", per)
+	if remain < 1 {
+		r.Response.Status = 429
+		reservation := limiter.ReserveN(time.Now(), 1)
+		if !reservation.OK() {
+			// 处理预留失败的情况，例如返回错误
 			r.Response.WriteJson(g.Map{
-				// "detail:":"您已经触发使用频率限制,当前限制为 "+ gconv.String(config.LIMIT) + " 次/"+ gconv.String(config.PER) + ",请等待 " + gconv.String(int(wait)) + " 秒后再试.",
-				"detail": "You have triggered the usage frequency limit, the current limit is " + gconv.String(config.LIMIT) + " times/" + gconv.String(config.PER) + ", please wait " + gconv.String(int(wait)) + " seconds before trying again.\n" + "您已经触发使用频率限制,当前限制为 " + gconv.String(config.LIMIT) + " 次/" + gconv.String(config.PER) + ",请等待 " + gconv.String(int(wait)) + " 秒后再试.",
+				"error": "You have triggered the usage frequency limit of " + model + ", the current limit is " + gconv.String(limit) + " times/" + gconv.String(per) + ", please wait a moment before trying again.\n" + "您已经触发 " + model + " 使用频率限制,当前限制为 " + gconv.String(limit) + " 次/" + gconv.String(per) + ",请稍后再试.",
 			})
-			return
-		} else {
-			// 消耗一个令牌
-			limiter.Allow()
-			r.Response.Status = 200
+			reservation.Cancel() // 取消预留，不消耗令牌
 			return
 		}
+		delayFrom := reservation.Delay()
+		reservation.Cancel() // 取消预留，不消耗令牌
 
+		g.Log().Debug(ctx, "delayFrom", delayFrom)
+		r.Response.WriteJson(g.Map{
+			"error": "You have triggered the usage frequency limit of " + model + ", the current limit is " + gconv.String(limit) + " times/" + gconv.String(per) + ", please wait " + gconv.String(int(delayFrom.Seconds())) + " seconds before trying again.\n" + "您已经触发 " + model + " 使用频率限制,当前限制为 " + gconv.String(limit) + " 次/" + gconv.String(per) + ",请等待 " + gconv.String(int(delayFrom.Seconds())) + " 秒后再试.",
+		})
+		return
 	}
+	// 消耗一个令牌
+	limiter.Allow()
 
 	r.Response.Status = 200
 

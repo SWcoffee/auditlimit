@@ -1,4 +1,4 @@
-FROM loads/alpine:3.8
+FROM --platform=$BUILDPLATFORM loads/alpine:3.8
 
 ###############################################################################
 #                                INSTALLATION
@@ -6,7 +6,7 @@ FROM loads/alpine:3.8
 
 ENV WORKDIR                 /app
 # ADD resource                $WORKDIR/resource
-ADD ./temp/linux_amd64/main $WORKDIR/main
+ADD ./temp/${TARGETARCH}/main $WORKDIR/main
 # COPY config.prod.yaml       $WORKDIR/config.yaml
 ADD ./data                  $WORKDIR/data
 RUN chmod +x $WORKDIR/main
